@@ -3,7 +3,6 @@ import tensorflow as tf
  
 class GATv2SelfAttention(layers.Layer):
     def __init__(self, seq_size=8, num_heads=8, ff_dim=2048, coef_drop=0.1, in_drop=0.2, alpha=0.3, residual=True, activation=lambda x: x):
- 
         super(GATv2SelfAttention, self).__init__()
         self.heads = []
         self.num_heads = num_heads
@@ -14,16 +13,9 @@ class GATv2SelfAttention(layers.Layer):
         self.seq_size = seq_size
         self.ff_dim = ff_dim
         self.activation = activation
-
-        for i in range(self.num_heads):
-            self.heads.append({
-                'coef_drop':layers.Dropout(self.coef_drop),
-                'in_drop':layers.Dropout(self.in_drop),
-                'leaky_relu':layers.LeakyReLU(alpha)
-            })
+        self.head_weights = []
 
     def build(self, input_shape):
-        self.head_weights = []
         for i in range(self.num_heads):
             self.head_weights.append({
                 'att_weights':self.add_weight(f'att_weights_{i}',
@@ -39,6 +31,12 @@ class GATv2SelfAttention(layers.Layer):
                                         initializer='zeros',
                                         trainable=True)
             })
+            self.heads.append({
+                'coef_drop':layers.Dropout(self.coef_drop),
+                'in_drop':layers.Dropout(self.in_drop),
+                'leaky_relu':layers.LeakyReLU(self.alpha)
+            })
+        super(GATv2SelfAttention, self).build(input_shape)
 
     def call(self, inputs, training):
         # GATv2 https://arxiv.org/pdf/2105.14491.pdf
@@ -52,7 +50,7 @@ class GATv2SelfAttention(layers.Layer):
         attns = None
         for i in range(self.num_heads):
             
-            # Linear on concatenated sequence (W has leaky_relu)
+            # Linear on concatenated sequence
             Wh = tf.matmul(h_cat, self.head_weights[i]['W'])
             Wh = self.heads[i]['leaky_relu'](Wh) # (bs, seq, ff_dim) 
 
@@ -79,4 +77,28 @@ class GATv2SelfAttention(layers.Layer):
             if attns == None:
                 attns = att_out
             else: attns += att_out
-        return attns/self.num_heads, attention
+        return attns/self.num_heads
+
+def gat_clf_model(in_dim=512, seq_size=10, out_emb=512, ff_dim=512, proj_emb=2048, n_heads=8, output_drop=0.2, l2_reg=1e-3, coef_drop=0.6, in_drop=0.2, n_labels=7):
+
+    inp1 = layers.Input(shape=(seq_size, in_dim))
+ 
+    linear = layers.Conv1D(proj_emb, 1)(inp1)
+    linear = layers.Conv1D(ff_dim, 1)(linear)
+    
+    att_layer = GATv2SelfAttention(seq_size=seq_size, num_heads=n_heads, coef_drop=coef_drop, in_drop=in_drop, ff_dim=ff_dim, residual=True, activation=layers.Activation('elu'))
+    att_out = att_layer(linear)
+
+    embedded = tf.reduce_mean(att_out, axis=1)
+    embedded = layers.Dense(out_emb,activity_regularizer=tf.keras.regularizers.l2(l2_reg))(embedded)
+    
+    attention = tf.keras.Model(inp1, embedded)
+    
+    classifier_in = layers.Input(shape=(out_emb))
+    outputs = layers.Dropout(output_drop)(classifier_in)
+    outputs = layers.Dense(n_labels, activation="softmax")(outputs)
+    classifier = tf.keras.Model(classifier_in, outputs)
+ 
+    model = tf.keras.Model(inp1, classifier(attention(inp1)))
+
+    return model
