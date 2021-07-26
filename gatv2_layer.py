@@ -78,27 +78,3 @@ class GATv2SelfAttention(layers.Layer):
                 attns = att_out
             else: attns += att_out
         return attns/self.num_heads
-
-def gat_clf_model(in_dim=512, seq_size=10, out_emb=512, ff_dim=512, proj_emb=2048, n_heads=8, output_drop=0.2, l2_reg=1e-3, coef_drop=0.6, in_drop=0.2, n_labels=7):
-
-    inp1 = layers.Input(shape=(seq_size, in_dim))
- 
-    linear = layers.Conv1D(proj_emb, 1)(inp1)
-    linear = layers.Conv1D(ff_dim, 1)(linear)
-    
-    att_layer = GATv2SelfAttention(seq_size=seq_size, num_heads=n_heads, coef_drop=coef_drop, in_drop=in_drop, ff_dim=ff_dim, residual=True, activation=layers.Activation('elu'))
-    att_out = att_layer(linear)
-
-    embedded = tf.reduce_mean(att_out, axis=1)
-    embedded = layers.Dense(out_emb,activity_regularizer=tf.keras.regularizers.l2(l2_reg))(embedded)
-    
-    attention = tf.keras.Model(inp1, embedded)
-    
-    classifier_in = layers.Input(shape=(out_emb))
-    outputs = layers.Dropout(output_drop)(classifier_in)
-    outputs = layers.Dense(n_labels, activation="softmax")(outputs)
-    classifier = tf.keras.Model(classifier_in, outputs)
- 
-    model = tf.keras.Model(inp1, classifier(attention(inp1)))
-
-    return model
